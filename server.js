@@ -1,119 +1,133 @@
 'use strict';
+
 require('dotenv').config();
 
-const express = require('express');
 const path = require('path');
+const fs = require('fs');
+const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const mongoose = require('mongoose');
-const fs = require('fs');
+const bodyParser = require('body-parser');
 
-const apiRoutes = require('./routes/api.js');
-
+const apiRoutes = require('./routes/api.js');        // tus endpoints del board (boilerplate)
 const app = express();
 
-/* ======================== Seguridad (FCC checks) ======================== */
-// Solo iframes del mismo origen (SAMEORIGIN)
-app.use(helmet.frameguard({ action: 'sameorigin' }));
-// Deshabilitar DNS prefetch
-app.use(helmet.dnsPrefetchControl({ allow: false }));
-// Enviar referrer solo a páginas propias
-app.use(helmet.referrerPolicy({ policy: 'same-origin' }));
+/* =======================
+   Seguridad pedida por FCC
+   ======================= */
+// 2) Solo permitir que tu sitio se cargue en iFrame en tus propias páginas
+app.use(helmet.frameguard({ action: 'sameorigin' }));   // X-Frame-Options: SAMEORIGIN
 
-// Es útil no cachear en los tests
-app.disable('etag');
-app.use((_, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
-/* ====================================================================== */
+// 3) No permitir DNS prefetching
+app.use(helmet.dnsPrefetchControl({ allow: false }));   // X-DNS-Prefetch-Control: off
 
-app.use(cors());
+// 4) Solo enviar el referrer para tus propias páginas
+app.use(helmet.referrerPolicy({ policy: 'same-origin' })); // Referrer-Policy: same-origin
+
+// (opcionales útiles)
+app.use(helmet.hidePoweredBy());
+app.use(helmet.noSniff());
+
+/* ===============
+   App base
+   =============== */
+app.use(cors({ origin: '*' })); // para pruebas FCC
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 app.use('/public', express.static(path.join(process.cwd(), 'public')));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-/* ======================== Mongo opcional ======================== */
-const MONGO_URI = process.env.MONGO_URI;
-if (MONGO_URI) {
-  mongoose.connect(MONGO_URI)
-    .then(() => console.log('[BOOT] Mongo connected'))
-    .catch(err => console.error('[BOOT] Mongo error:', err.message));
-} else {
-  console.log('[BOOT] Mongo disabled (using in-memory store)');
-}
-/* ================================================================ */
-
-/* ======================== Utilitarios para Render ======================== */
-app.get('/_api/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
-
-app.get('/_api/app-info', (_req, res) => {
-  res.json({
-    headers: {
-      'x-content-type-options': 'nosniff',
-      'referrer-policy': 'same-origin',
-      'x-frame-options': 'SAMEORIGIN',
-      'cache-control': 'no-store'
-    }
-  });
+// Index
+app.route('/').get((_req, res) => {
+  res.sendFile(path.join(process.cwd(), 'views', 'index.html'));
 });
 
-/* 
- * Ejecutar mocha bajo demanda (como hicimos en el proyecto anterior).
- * No interfiere con los archivos de FCC (fcctesting.js / test-runner.js).
- */
-let running = false;
+// Rutas del proyecto (threads/replies)
+apiRoutes(app);
+
+/* ==========================
+   Endpoints utilitarios _api
+   ========================== */
+
+// Ping (rápido)
+app.get('/_api/ping', (_req, res) => {
+  res.type('text/plain').send('pong');
+});
+
+// Devolver cabeceras de seguridad efectivas
+app.get('/_api/app-info', (req, res) => {
+  res.json({ headers: res.getHeaders() });
+});
+
+/* -------- Mocha bajo demanda: /_api/get-tests --------
+   Ejecuta tests/2_functional-tests.js y devuelve resultados.
+   Evita concurrencia entre ejecuciones.
+------------------------------------------------------- */
+let testing = false;
+
 app.get('/_api/get-tests', async (_req, res) => {
   try {
-    if (running) return res.json({ status: 'running' });
+    if (testing) return res.json({ status: 'running' });
 
     const testsFile = path.join(__dirname, 'tests', '2_functional-tests.js');
     if (!fs.existsSync(testsFile)) {
       return res.status(500).json({ status: 'error', error: 'Tests file not found' });
     }
 
-    running = true;
+    testing = true;
+
     const Mocha = require('mocha');
     const mocha = new Mocha({ timeout: 20000, color: false });
 
+    // limpiar caché y cargar archivo
     delete require.cache[require.resolve(testsFile)];
     mocha.addFile(testsFile);
 
     const results = [];
-    const runner = mocha.run(() => { running = false; });
+    const runner = mocha.run(() => { testing = false; });
 
-    runner.on('pass', t => results.push({
-      title: t.title, fullTitle: t.fullTitle(), state: 'passed', duration: t.duration
-    }));
-    runner.on('fail', (t, err) => results.push({
-      title: t.title, fullTitle: t.fullTitle(), state: 'failed', err: err?.message || String(err)
-    }));
-    runner.on('end', () => res.json({
-      status: 'finished',
-      stats: runner.stats,
-      tests: results
-    }));
+    runner.on('pass', test => {
+      results.push({
+        title: test.title,
+        fullTitle: test.fullTitle(),
+        state: 'passed',
+        duration: test.duration
+      });
+    });
+
+    runner.on('fail', (test, err) => {
+      results.push({
+        title: test.title,
+        fullTitle: test.fullTitle(),
+        state: 'failed',
+        err: (err && (err.message || String(err))) || 'Unknown error'
+      });
+    });
+
+    runner.on('end', () => {
+      res.json({
+        status: 'finished',
+        stats: {
+          tests: runner.stats.tests,
+          passes: runner.stats.passes,
+          failures: runner.stats.failures,
+          duration: runner.stats.duration
+        },
+        tests: results
+      });
+    });
   } catch (e) {
-    running = false;
-    console.error('[get-tests] error', e);
+    testing = false;
     res.status(500).json({ status: 'error', error: e.message || String(e) });
   }
 });
-/* ======================================================================== */
-
-/* ======================== Páginas + API ======================== */
-app.get('/', (_req, res) => {
-  res.sendFile(path.join(process.cwd(), 'views', 'index.html'));
-});
-
-app.use('/api', apiRoutes);
 
 /* 404 */
-app.use(function (_req, res) {
-  res.status(404).type('text').send('Not Found');
-});
+app.use((_req, res) => res.status(404).type('text').send('Not Found'));
 
 /* Listener */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`[BOOT] Server running on http://localhost:${PORT}`);
+  console.log('[BOOT] Listening on port', PORT);
 });
 
-module.exports = app;
+module.exports = app; // para chai-http
