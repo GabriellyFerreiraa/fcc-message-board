@@ -9,22 +9,19 @@ const cors = require('cors');
 const helmet = require('helmet');
 const bodyParser = require('body-parser');
 
-const apiRoutes = require('./routes/api.js');        // tus endpoints del board (boilerplate)
+const apiRoutes = require('./routes/api.js'); // endpoints del board
 const app = express();
 
 /* =======================
    Seguridad pedida por FCC
    ======================= */
 // 2) Solo permitir que tu sitio se cargue en iFrame en tus propias páginas
-app.use(helmet.frameguard({ action: 'sameorigin' }));   // X-Frame-Options: SAMEORIGIN
-
+app.use(helmet.frameguard({ action: 'sameorigin' })); // X-Frame-Options: SAMEORIGIN
 // 3) No permitir DNS prefetching
-app.use(helmet.dnsPrefetchControl({ allow: false }));   // X-DNS-Prefetch-Control: off
-
+app.use(helmet.dnsPrefetchControl({ allow: false })); // X-DNS-Prefetch-Control: off
 // 4) Solo enviar el referrer para tus propias páginas
 app.use(helmet.referrerPolicy({ policy: 'same-origin' })); // Referrer-Policy: same-origin
-
-// (opcionales útiles)
+// extras útiles
 app.use(helmet.hidePoweredBy());
 app.use(helmet.noSniff());
 
@@ -54,7 +51,7 @@ app.get('/_api/ping', (_req, res) => {
 });
 
 // Devolver cabeceras de seguridad efectivas
-app.get('/_api/app-info', (req, res) => {
+app.get('/_api/app-info', (_req, res) => {
   res.json({ headers: res.getHeaders() });
 });
 
@@ -73,14 +70,22 @@ app.get('/_api/get-tests', async (_req, res) => {
       return res.status(500).json({ status: 'error', error: 'Tests file not found' });
     }
 
-    testing = true;
+    // Alinear entorno con FCC
+    process.env.NODE_ENV = 'test';
 
     const Mocha = require('mocha');
-    const mocha = new Mocha({ timeout: 20000, color: false });
+    // 👉 Interfaz TDD para habilitar `suite` y `test`
+    const mocha = new Mocha({
+      ui: 'tdd',
+      timeout: 20000,
+      color: false
+    });
 
     // limpiar caché y cargar archivo
     delete require.cache[require.resolve(testsFile)];
     mocha.addFile(testsFile);
+
+    testing = true;
 
     const results = [];
     const runner = mocha.run(() => { testing = false; });
@@ -117,6 +122,7 @@ app.get('/_api/get-tests', async (_req, res) => {
     });
   } catch (e) {
     testing = false;
+    console.error('[get-tests] error:', e);
     res.status(500).json({ status: 'error', error: e.message || String(e) });
   }
 });
