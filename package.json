@@ -13,10 +13,8 @@
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "helmet": "^8.1.0",
-    "mongoose": "^8.19.2"
-  },
-  "devDependencies": {
-    "chai": "^4.5.0",
+    "mongoose": "^8.19.2",
+	"chai": "^4.5.0",
     "chai-http": "^5.1.2",
     "mocha": "^11.7.4"
   }
